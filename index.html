@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM 有多自信？</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        background: 'hsl(var(--background))',
+                        foreground: 'hsl(var(--foreground))',
+                        muted: 'hsl(var(--muted))',
+                        'muted-foreground': 'hsl(var(--muted-foreground))',
+                        border: 'hsl(var(--border))',
+                        primary: 'hsl(var(--primary))',
+                        'primary-foreground': 'hsl(var(--primary-foreground))',
+                    },
+                },
+            },
+        }
+    </script>
+    <style>
+        :root {
+            --background: 0 0% 100%;
+            --foreground: 0 0% 10%;
+            --muted: 0 0% 98%;
+            --muted-foreground: 0 0% 45%;
+            --border: 0 0% 90%;
+            --primary: 0 0% 0%;
+            --primary-foreground: 0 0% 100%;
+        }
+        
+        .dark {
+            --background: 0 0% 5%;
+            --foreground: 0 0% 98%;
+            --muted: 0 0% 10%;
+            --muted-foreground: 0 0% 65%;
+            --border: 0 0% 20%;
+            --primary: 0 0% 100%;
+            --primary-foreground: 0 0% 0%;
+        }
+        
+        /* 自定义滚动条 */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: hsl(var(--muted));
+            border-radius: 3px;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: hsl(var(--muted-foreground) / 0.4);
+            border-radius: 3px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: hsl(var(--muted-foreground) / 0.6);
+        }
+        
+        /* Token 样式 */
+        .token {
+            position: relative;
+            display: inline-block;
+            padding: 0.125rem 0.25rem;
+            margin: 0.125rem;
+            border-radius: 0.125rem;
+            transition: all 0.2s;
+            cursor: help;
+        }
+        
+        .token:hover {
+            background-color: hsl(var(--border) / 0.5);
+        }
+        
+        /* 工具提示 */
+        .tooltip {
+            position: fixed;
+            z-index: 50;
+            max-width: 280px;
+            border-radius: 0.375rem;
+            background-color: hsl(var(--foreground));
+            color: hsl(var(--background));
+            padding: 0.75rem;
+            font-size: 0.75rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            opacity: 0;
+            transition: opacity 0.2s;
+            pointer-events: none;
+            border: 1px solid hsl(var(--border));
+        }
+        
+        .tooltip.show {
+            opacity: 1;
+        }
+        
+        /* 置信度颜色 */
+        .confidence-high {
+            color: #10b981;
+        }
+        
+        .confidence-medium {
+            color: #f59e0b;
+        }
+        
+        .confidence-low {
+            color: #ef4444;
+        }
+        
+        /* 加载指示器 */
+        .loading-indicator {
+            display: none;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem;
+            background: hsl(var(--muted));
+            border-radius: 0.375rem;
+            margin-top: 1rem;
+            font-size: 0.875rem;
+        }
+        
+        .loading-indicator.active {
+            display: flex;
+        }
+        
+        .loading-spinner {
+            width: 1rem;
+            height: 1rem;
+            border: 2px solid hsl(var(--border));
+            border-top-color: hsl(var(--primary));
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-background text-foreground min-h-screen transition-colors duration-300">
+    <div class="container mx-auto px-4 py-8 max-w-4xl">
+        <!-- 头部 -->
+        <header class="mb-12">
+            <h1 class="text-3xl font-bold mb-2">LLM 有多自信？</h1>
+            <p class="text-muted-foreground">词元概率可视化 · 请先: <a href="https://ollama.com/">安装 Ollama</a> -> <a href="https://ollama.com/library/qwen3:4b-instruct-2507-q4_K_M">下载模型</a> -> <a href="https://docs.ollama.com/faq#how-can-i-allow-additional-web-origins-to-access-ollama">配置 CROS</a></p>
+        </header>
+
+        <!-- 折叠的参数设置 -->
+        <div class="mb-8">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-lg font-semibold">参数设置</h2>
+                <button id="toggle-params" class="text-sm text-muted-foreground hover:text-foreground transition-colors">
+                    显示设置
+                </button>
+            </div>
+            
+            <div id="params-panel" class="overflow-hidden hidden">
+                <div class="border border-border rounded-lg p-6 bg-muted/30">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                        <div>
+                            <label class="block text-sm font-medium mb-2">模型</label>
+                            <select id="model-select" class="w-full p-2 bg-background border border-border rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-primary">
+                                <option value="">加载中...</option>
+                            </select>
+                            <div class="mt-2">
+                                <button id="refresh-models" class="text-xs text-muted-foreground hover:text-foreground transition-colors">
+                                    刷新模型列表
+                                </button>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium mb-2">备选词元数量</label>
+                            <input type="number" id="top_logprobs" value="3" min="0" max="10" 
+                                   class="w-full p-2 bg-background border border-border rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-primary">
+                        </div>
+                    </div>
+                    
+                    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                        <div>
+                            <label class="block text-sm font-medium mb-1">temperature</label>
+                            <input type="number" id="temperature" min="0" max="2" step="0.1" placeholder="默认 0.8"
+                                   class="w-full p-2 bg-background border border-border rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-primary">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium mb-1">top_k</label>
+                            <input type="number" id="top_k" min="1" max="100" step="1" placeholder="默认 40"
+                                   class="w-full p-2 bg-background border border-border rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-primary">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium mb-1">top_p</label>
+                            <input type="number" id="top_p" min="0" max="1" step="0.05" placeholder="默认 0.9"
+                                   class="w-full p-2 bg-background border border-border rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-primary">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium mb-1">min_p</label>
+                            <input type="number" id="min_p" min="0" max="1" step="0.05" placeholder="默认 0.05"
+                                   class="w-full p-2 bg-background border border-border rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-primary">
+                        </div>
+                    </div>
+                    
+                    <div class="flex items-center justify-between text-sm text-muted-foreground">
+                        <div class="flex items-center gap-4">
+                            <span class="flex items-center gap-2">
+                                <span class="inline-block w-3 h-3 rounded-sm bg-black/90 dark:bg-white/90"></span>
+                                低置信度
+                            </span>
+                            <span class="flex items-center gap-2">
+                                <span class="inline-block w-3 h-3 rounded-sm bg-black/30 dark:bg-white/30"></span>
+                                高置信度
+                            </span>
+                        </div>
+                        <button id="theme-toggle" class="hover:text-foreground transition-colors">
+                            切换主题
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 垂直单列布局 -->
+        <div class="space-y-8">
+            <!-- 输入区域 -->
+            <div>
+                <h2 class="text-lg font-semibold mb-4">输入提示词</h2>
+                <div class="space-y-4">
+                    <textarea 
+                        id="prompt-input" 
+                        rows="8"
+                        class="w-full p-4 bg-background border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary transition-all resize-none font-mono text-sm"
+                        placeholder="输入您的提示词..."
+                    ><|im_start|>system
+You are a helpful AI assistant.<|im_end|>
+<|im_start|>user
+请帮我解释一下量子计算的基本原理是什么？<|im_end|>
+<|im_start|>assistant
+</textarea>
+                    
+                    <div class="flex gap-3">
+                        <button id="generate-btn" class="flex-1 bg-primary text-primary-foreground py-3 px-6 rounded-lg font-medium hover:opacity-90 transition-opacity">
+                            生成补全
+                        </button>
+                        <button id="clear-btn" class="px-4 border border-border rounded-lg hover:bg-muted transition-colors">
+                            清除
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 输出区域 -->
+            <div>
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-lg font-semibold">生成结果</h2>
+                    <div class="text-sm text-muted-foreground">
+                        悬停词元查看概率
+                    </div>
+                </div>
+                
+                <div class="space-y-4">
+                    <div id="output-container" class="border border-border rounded-lg bg-muted/10 p-6 min-h-[300px] font-mono text-sm leading-relaxed whitespace-pre-wrap break-words">
+                        <div id="output-content">
+                            <!-- 初始提示 -->
+                            <div class="text-center text-muted-foreground py-12">
+                                <div class="mb-4 text-2xl opacity-30">?</div>
+                                <p class="mb-2">等待生成文本...</p>
+                                <p class="text-xs">生成的词元将以背景透明度显示置信度</p>
+                                <p class="text-xs mt-1">悬停在词元上查看备选词元及其概率</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 加载指示器（在输出区域下方，而不是覆盖） -->
+                    <div id="loading-indicator" class="loading-indicator">
+                        <div class="loading-spinner"></div>
+                        <span>正在生成文本...</span>
+                    </div>
+                    
+                    <!-- 状态信息 -->
+                    <div id="status" class="p-4 rounded-lg border border-border hidden">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <p id="status-text" class="font-medium"></p>
+                                <p id="status-details" class="text-sm text-muted-foreground mt-1"></p>
+                            </div>
+                            <button id="clear-status" class="text-muted-foreground hover:text-foreground">
+                                ×
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 底部信息 -->
+        <footer class="pt-8 mt-12 border-t border-border text-center text-sm text-muted-foreground">
+            <p>基于 Ollama API Logprobs · 透明度 = exp(logprob) = 词元概率</p>
+            <p class="mt-1 text-xs"><a href="https://github.com/DreamBlooms">https://github.com/DreamBlooms</a></p>
+        </footer>
+    </div>
+
+    <!-- 工具提示容器 -->
+    <div id="token-tooltip" class="tooltip">
+        <div id="current-token-info" class="mb-3 pb-3 border-b border-white/20">
+            <!-- 当前词元信息 -->
+        </div>
+        <div>
+            <p class="font-semibold mb-2">备选词元</p>
+            <div id="tooltip-content">
+                <!-- 备选词元列表 -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Ollama API 配置
+        const OLLAMA_BASE_URL = 'http://localhost:11434';
+        const OLLAMA_API_URL = `${OLLAMA_BASE_URL}/api/generate`;
+        const OLLAMA_TAGS_URL = `${OLLAMA_BASE_URL}/api/tags`;
+
+        // DOM 元素
+        const themeToggle = document.getElementById('theme-toggle');
+        const toggleParamsBtn = document.getElementById('toggle-params');
+        const paramsPanel = document.getElementById('params-panel');
+        const modelSelect = document.getElementById('model-select');
+        const promptInput = document.getElementById('prompt-input');
+        const temperatureInput = document.getElementById('temperature');
+        const topKInput = document.getElementById('top_k');
+        const topPInput = document.getElementById('top_p');
+        const minPInput = document.getElementById('min_p');
+        const topLogprobsInput = document.getElementById('top_logprobs');
+        const generateBtn = document.getElementById('generate-btn');
+        const clearBtn = document.getElementById('clear-btn');
+        const refreshModelsBtn = document.getElementById('refresh-models');
+        const outputContainer = document.getElementById('output-container');
+        const outputContent = document.getElementById('output-content');
+        const loadingIndicator = document.getElementById('loading-indicator');
+        const statusElement = document.getElementById('status');
+        const statusText = document.getElementById('status-text');
+        const statusDetails = document.getElementById('status-details');
+        const clearStatusBtn = document.getElementById('clear-status');
+        const tokenTooltip = document.getElementById('token-tooltip');
+        const tooltipContent = document.getElementById('tooltip-content');
+        const currentTokenInfo = document.getElementById('current-token-info');
+
+        // 状态变量
+        let currentTokens = [];
+        let isDarkMode = document.documentElement.classList.contains('dark');
+        let isGenerating = false;
+
+        // 主题切换
+        themeToggle.addEventListener('click', () => {
+            isDarkMode = !isDarkMode;
+            document.documentElement.classList.toggle('dark', isDarkMode);
+            
+            // 重新渲染所有token以适应新主题
+            setTimeout(() => {
+                renderTokens();
+            }, 100);
+        });
+
+        // 切换参数面板
+        toggleParamsBtn.addEventListener('click', () => {
+            paramsPanel.classList.toggle('hidden');
+            toggleParamsBtn.textContent = paramsPanel.classList.contains('hidden') ? '显示设置' : '隐藏设置';
+        });
+
+        // 更新状态显示
+        function updateStatus(message, type = 'info', details = '') {
+            statusText.textContent = message;
+            statusDetails.textContent = details;
+            
+            // 设置状态类型
+            statusElement.className = 'p-4 rounded-lg border';
+            
+            if (type === 'success') {
+                statusElement.classList.add('border-green-500/30', 'bg-green-500/5');
+            } else if (type === 'error') {
+                statusElement.classList.add('border-red-500/30', 'bg-red-500/5');
+            } else {
+                statusElement.classList.add('border-border');
+            }
+            
+            statusElement.classList.remove('hidden');
+        }
+
+        // 清除状态
+        clearStatusBtn.addEventListener('click', () => {
+            statusElement.classList.add('hidden');
+        });
+
+        // 清除输出
+        clearBtn.addEventListener('click', () => {
+            outputContent.innerHTML = `
+                <div class="text-center text-muted-foreground py-12">
+                    <div class="mb-4 text-2xl opacity-30">?</div>
+                    <p class="mb-2">等待生成文本...</p>
+                    <p class="text-xs">生成的词元将以背景透明度显示置信度</p>
+                    <p class="text-xs mt-1">悬停在词元上查看备选词元及其概率</p>
+                </div>
+            `;
+            currentTokens = [];
+            updateStatus('输出已清除', 'success');
+        });
+
+        // 显示/隐藏加载状态
+        function setLoading(isLoading) {
+            isGenerating = isLoading;
+            
+            if (isLoading) {
+                loadingIndicator.classList.add('active');
+                generateBtn.disabled = true;
+                generateBtn.textContent = '生成中...';
+                
+                // 如果还没有内容，显示初始状态
+                if (currentTokens.length === 0) {
+                    outputContent.innerHTML = `
+                        <div class="text-center text-muted-foreground py-8">
+                            <div class="mb-4 text-xl opacity-30">...</div>
+                            <p class="mb-2">正在生成文本...</p>
+                        </div>
+                    `;
+                }
+            } else {
+                loadingIndicator.classList.remove('active');
+                generateBtn.disabled = false;
+                generateBtn.textContent = '生成补全';
+            }
+        }
+
+        // 将logprob转换为概率百分比
+        function logprobToPercentage(logprob) {
+            const probability = Math.exp(logprob);
+            return Math.round(probability * 10000) / 100;
+        }
+
+        // 根据概率百分比获取置信度等级
+        function getConfidenceLevel(percentage) {
+            if (percentage >= 80) return 'high';
+            if (percentage >= 50) return 'medium';
+            return 'low';
+        }
+
+        // 将logprob转换为透明度
+        function logprobToOpacity(logprob) {
+            const probability = Math.exp(logprob);
+            const minOpacity = 0.2;
+            const maxOpacity = 0.9;
+            let opacity = minOpacity + (1 - probability) * (maxOpacity - minOpacity);
+            return Math.max(minOpacity, Math.min(maxOpacity, opacity));
+        }
+
+        // 重新渲染所有token（用于主题切换时）
+        function renderTokens() {
+            if (currentTokens.length === 0) return;
+            
+            const newContent = document.createElement('div');
+            newContent.className = 'font-mono text-sm leading-relaxed whitespace-pre-wrap break-words';
+            
+            currentTokens.forEach(tokenData => {
+                const tokenElement = createTokenElement(tokenData);
+                newContent.appendChild(tokenElement);
+            });
+            
+            outputContent.innerHTML = '';
+            outputContent.appendChild(newContent);
+        }
+
+        // 创建token元素
+        function createTokenElement(tokenData) {
+            const tokenElement = document.createElement('span');
+            tokenElement.className = 'token';
+            tokenElement.textContent = tokenData.token;
+            
+            // 计算透明度和概率百分比
+            const opacity = logprobToOpacity(tokenData.logprob);
+            const percentage = logprobToPercentage(tokenData.logprob);
+            
+            // 根据主题设置背景颜色
+            const bgColor = isDarkMode 
+                ? `rgba(255, 255, 255, ${opacity})`
+                : `rgba(0, 0, 0, ${opacity})`;
+            
+            tokenElement.style.backgroundColor = bgColor;
+            
+            // 存储数据
+            tokenElement.dataset.logprob = tokenData.logprob;
+            tokenElement.dataset.token = tokenData.token;
+            tokenElement.dataset.percentage = percentage;
+            
+            if (tokenData.top_logprobs) {
+                tokenElement.dataset.topLogprobs = JSON.stringify(tokenData.top_logprobs);
+            }
+            
+            // 添加事件
+            tokenElement.addEventListener('mouseenter', showTokenTooltip);
+            tokenElement.addEventListener('mouseleave', hideTokenTooltip);
+            
+            return tokenElement;
+        }
+
+        // 显示token工具提示
+        function showTokenTooltip(event) {
+            const tokenElement = event.target;
+            const logprob = parseFloat(tokenElement.dataset.logprob);
+            const token = tokenElement.dataset.token;
+            const percentage = parseFloat(tokenElement.dataset.percentage);
+            const topLogprobs = tokenElement.dataset.topLogprobs ? JSON.parse(tokenElement.dataset.topLogprobs) : null;
+            
+            // 置信度等级
+            const confidenceLevel = getConfidenceLevel(percentage);
+            const confidenceClass = `confidence-${confidenceLevel}`;
+            
+            // 构建当前词元信息
+            let currentTokenHTML = `
+                <div class="flex items-center justify-between mb-1">
+                    <div class="font-semibold">当前词元</div>
+                    <div class="text-sm ${confidenceClass} font-bold">${percentage.toFixed(1)}%</div>
+                </div>
+                <div class="font-mono text-sm bg-white/10 p-2 rounded mb-2">"${token}"</div>
+                <div class="flex items-center justify-between">
+                    <span class="text-xs opacity-80">log=${logprob.toFixed(4)}</span>
+                    <span class="text-xs ${confidenceClass}">
+                        ${confidenceLevel === 'high' ? '高' : 
+                          confidenceLevel === 'medium' ? '中' : '低'}
+                    </span>
+                </div>
+            `;
+            
+            currentTokenInfo.innerHTML = currentTokenHTML;
+            
+            // 构建备选词元列表
+            let tooltipHTML = '';
+            
+            if (topLogprobs && topLogprobs.length > 0) {
+                tooltipHTML = '<div class="space-y-1">';
+                
+                topLogprobs.forEach((item, index) => {
+                    const itemPercentage = logprobToPercentage(item.logprob);
+                    const itemConfidenceLevel = getConfidenceLevel(itemPercentage);
+                    const itemConfidenceClass = `confidence-${itemConfidenceLevel}`;
+                    
+                    tooltipHTML += `
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-2">
+                                <span class="text-xs w-4 text-right opacity-60">${index + 1}.</span>
+                                <span class="font-mono text-sm">"${item.token}"</span>
+                            </div>
+                            <div class="text-xs ${itemConfidenceClass}">${itemPercentage.toFixed(1)}%</div>
+                        </div>
+                    `;
+                });
+                
+                tooltipHTML += '</div>';
+            } else {
+                tooltipHTML = '<div class="text-center text-sm opacity-70 py-2">无备选词元数据</div>';
+            }
+            
+            tooltipContent.innerHTML = tooltipHTML;
+            
+            // 定位工具提示
+            const rect = tokenElement.getBoundingClientRect();
+            const tooltipWidth = 280;
+            const tooltipHeight = 240;
+            
+            let left = rect.left + rect.width / 2 - tooltipWidth / 2;
+            let top = rect.bottom + 10;
+            
+            // 边界检查
+            if (left < 10) left = 10;
+            if (left + tooltipWidth > window.innerWidth) left = window.innerWidth - tooltipWidth - 10;
+            if (top + tooltipHeight > window.innerHeight) top = rect.top - tooltipHeight - 10;
+            
+            tokenTooltip.style.left = `${left}px`;
+            tokenTooltip.style.top = `${top}px`;
+            tokenTooltip.classList.add('show');
+        }
+
+        // 隐藏token工具提示
+        function hideTokenTooltip() {
+            tokenTooltip.classList.remove('show');
+        }
+
+        // 从Ollama获取模型列表
+        async function fetchModels() {
+            try {
+                modelSelect.innerHTML = '<option value="">正在加载模型...</option>';
+                modelSelect.disabled = true;
+                
+                const response = await fetch(OLLAMA_TAGS_URL);
+                
+                if (!response.ok) {
+                    throw new Error(`获取模型列表失败: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                const models = data.models || [];
+                
+                if (models.length === 0) {
+                    modelSelect.innerHTML = '<option value="">未找到可用模型</option>';
+                    updateStatus('错误: 未找到可用模型', 'error');
+                    return;
+                }
+                
+                // 填充模型列表
+                modelSelect.innerHTML = '';
+                
+                // 查找默认模型
+                const defaultModelName = 'qwen3:4b-instruct-2507-q4_K_M';
+                let defaultModelFound = false;
+                
+                // 添加默认选项
+                const defaultOption = document.createElement('option');
+                defaultOption.value = defaultModelName;
+                defaultOption.textContent = `${defaultModelName} (默认)`;
+                defaultOption.selected = true;
+                modelSelect.appendChild(defaultOption);
+                
+                // 添加其他模型
+                models.forEach(model => {
+                    if (model.name === defaultModelName) {
+                        defaultModelFound = true;
+                        defaultOption.textContent = `${model.name} (默认)`;
+                    } else {
+                        const option = document.createElement('option');
+                        option.value = model.name;
+                        option.textContent = model.name;
+                        modelSelect.appendChild(option);
+                    }
+                });
+                
+                modelSelect.disabled = false;
+                
+                if (!defaultModelFound) {
+                    updateStatus(`注意: 默认模型未找到，使用列表第一个模型`, 'info');
+                } else {
+                    updateStatus(`已加载 ${models.length} 个模型`, 'success');
+                }
+                
+            } catch (error) {
+                console.error('获取模型列表失败:', error);
+                modelSelect.innerHTML = '<option value="">加载失败</option>';
+                updateStatus(`错误: ${error.message}`, 'error');
+                
+                if (error.message.includes('Failed to fetch')) {
+                    statusDetails.textContent = '请确保Ollama正在运行 (http://localhost:11434)';
+                }
+            }
+        }
+
+        // 处理生成请求
+        async function generateCompletion() {
+            const model = modelSelect.value;
+            const prompt = promptInput.value.trim();
+            const topLogprobs = parseInt(topLogprobsInput.value) || 0;
+            
+            // 构建请求选项
+            const options = {};
+            if (temperatureInput.value) options.temperature = parseFloat(temperatureInput.value);
+            if (topKInput.value) options.top_k = parseInt(topKInput.value);
+            if (topPInput.value) options.top_p = parseFloat(topPInput.value);
+            if (minPInput.value) options.min_p = parseFloat(minPInput.value);
+            
+            // 验证输入
+            if (!prompt) {
+                updateStatus('错误: 请输入提示词', 'error');
+                return;
+            }
+            
+            if (!model) {
+                updateStatus('错误: 请选择模型', 'error');
+                return;
+            }
+            
+            // 设置加载状态
+            setLoading(true);
+            updateStatus('正在连接Ollama API...', 'info');
+            
+            try {
+                // 构建请求体
+                const requestBody = {
+                    model,
+                    prompt,
+                    stream: true,
+                    logprobs: true,
+                    ...options
+                };
+                
+                if (topLogprobs > 0) {
+                    requestBody.top_logprobs = topLogprobs;
+                }
+                
+                // 发送请求
+                const response = await fetch(OLLAMA_API_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`API请求失败: ${response.status}`);
+                }
+                
+                // 清空输出（只在第一次生成时）
+                if (currentTokens.length === 0) {
+                    outputContent.innerHTML = '';
+                }
+                
+                currentTokens = [];
+                
+                updateStatus('正在接收流式响应...', 'info');
+                
+                // 处理流式响应
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let fullResponse = '';
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    
+                    if (done) break;
+                    
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n').filter(line => line.trim() !== '');
+                    
+                    for (const line of lines) {
+                        try {
+                            const data = JSON.parse(line);
+                            
+                            if (data.response) {
+                                fullResponse += data.response;
+                                
+                                if (data.logprobs && data.logprobs.length > 0) {
+                                    data.logprobs.forEach(tokenData => {
+                                        const tokenElement = createTokenElement(tokenData);
+                                        outputContent.appendChild(tokenElement);
+                                        currentTokens.push(tokenData);
+                                    });
+                                }
+                            }
+                            
+                            if (data.done) {
+                                // 计算统计信息
+                                let totalPercentage = 0;
+                                if (currentTokens.length > 0) {
+                                    currentTokens.forEach(token => {
+                                        totalPercentage += logprobToPercentage(token.logprob);
+                                    });
+                                    const avgPercentage = totalPercentage / currentTokens.length;
+                                    
+                                    updateStatus(
+                                        '生成完成', 
+                                        'success', 
+                                        `模型: ${data.model} · 词元数: ${currentTokens.length} · 平均置信度: ${avgPercentage.toFixed(1)}%`
+                                    );
+                                } else {
+                                    updateStatus(
+                                        '生成完成', 
+                                        'success', 
+                                        `模型: ${data.model}`
+                                    );
+                                }
+                            }
+                        } catch (e) {
+                            console.error('解析JSON失败:', e);
+                        }
+                    }
+                }
+                
+            } catch (error) {
+                console.error('生成请求失败:', error);
+                updateStatus(`错误: ${error.message}`, 'error');
+                
+                if (error.message.includes('Failed to fetch')) {
+                    statusDetails.textContent = '请确保Ollama正在运行 (http://localhost:11434)';
+                }
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        // 事件监听器
+        generateBtn.addEventListener('click', generateCompletion);
+        refreshModelsBtn.addEventListener('click', fetchModels);
+        
+        // 键盘快捷键
+        document.addEventListener('keydown', (event) => {
+            if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+                event.preventDefault();
+                generateCompletion();
+            }
+            
+            // 按ESC隐藏工具提示
+            if (event.key === 'Escape') {
+                hideTokenTooltip();
+            }
+        });
+
+        // 页面加载时初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            fetchModels();
+            
+            // 添加示例提示
+            setTimeout(() => {
+                const exampleToken = {
+                    token: "量子",
+                    logprob: -0.39648438,
+                    top_logprobs: [
+                        { token: "量子", logprob: -0.39648438 },
+                        { token: "经典", logprob: -1.823456 },
+                        { token: "现代", logprob: -2.134567 }
+                    ]
+                };
+                
+                const exampleElement = createTokenElement(exampleToken);
+                outputContent.innerHTML = '';
+                outputContent.appendChild(exampleElement);
+                
+                const percentage = logprobToPercentage(exampleToken.logprob);
+                updateStatus(`示例: 悬停在"量子"词元上查看概率 (${percentage.toFixed(1)}% 置信度)`, 'info');
+            }, 1000);
+        });
+
+        // 监听窗口大小变化，重新定位工具提示
+        window.addEventListener('resize', hideTokenTooltip);
+    </script>
+</body>
+</html>
