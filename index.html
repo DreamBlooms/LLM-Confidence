@@ -147,7 +147,7 @@
         <!-- 头部 -->
         <header class="mb-12">
             <h1 class="text-3xl font-bold mb-2">LLM 有多自信？</h1>
-            <p class="text-muted-foreground">词元概率可视化 · 请先: <a href="https://ollama.com/">安装 Ollama</a> -> <a href="https://ollama.com/library/qwen3:4b-instruct-2507-q4_K_M">下载模型</a> -> <a href="https://docs.ollama.com/faq#how-can-i-allow-additional-web-origins-to-access-ollama">配置 CORS</a></p>
+            <p class="text-muted-foreground">词元概率可视化 · 请先: <a href="https://ollama.com/" class="underline hover:text-primary" target="_blank">安装 Ollama</a> → <a href="https://ollama.com/library/qwen3:4b-instruct-2507-q4_K_M" class="underline hover:text-primary" target="_blank">下载模型</a> → <a href="https://docs.ollama.com/faq#how-can-i-allow-additional-web-origins-to-access-ollama" class="underline hover:text-primary" target="_blank">配置 CROS</a></p>
         </header>
 
         <!-- 折叠的参数设置 -->
@@ -226,7 +226,21 @@
         <div class="space-y-8">
             <!-- 输入区域 -->
             <div>
-                <h2 class="text-lg font-semibold mb-4">输入提示词</h2>
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-lg font-semibold">输入提示词</h2>
+                    <div class="flex items-center gap-3">
+                        <select id="example-prompt-select" class="text-sm p-2 bg-background border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary w-32">
+                            <option value="">选择示例...</option>
+                            <option value="future_event">2035年12月1日发生了什么？</option>
+                            <option value="short_story">请帮我写一个200字左右的故事？</option>
+                            <option value="website_info">example.com是什么网站？</option>
+                            <option value="internet_access">你可以联网吗？</option>
+                            <option value="translation">请将这句话翻译成英文：今天天气真好</option>
+                            <option value="code_example">写一个Python函数计算斐波那契数列</option>
+                            <option value="explain">天空为什么是蔚蓝色的？</option>
+                        </select>
+                    </div>
+                </div>
                 <div class="space-y-4">
                     <textarea 
                         id="prompt-input" 
@@ -298,7 +312,7 @@ You are a helpful AI assistant.<|im_end|>
         <!-- 底部信息 -->
         <footer class="pt-8 mt-12 border-t border-border text-center text-sm text-muted-foreground">
             <p>基于 Ollama API Logprobs · 透明度 = exp(logprob) = 词元概率</p>
-            <p class="mt-1 text-xs"><a href="https://github.com/DreamBlooms">https://github.com/DreamBlooms</a></p>
+            <p class="mt-1 text-xs"><a href="https://github.com/DreamBlooms" class="underline hover:text-primary" target="_blank">https://github.com/DreamBlooms</a></p>
         </footer>
     </div>
 
@@ -327,6 +341,7 @@ You are a helpful AI assistant.<|im_end|>
         const paramsPanel = document.getElementById('params-panel');
         const modelSelect = document.getElementById('model-select');
         const promptInput = document.getElementById('prompt-input');
+        const examplePromptSelect = document.getElementById('example-prompt-select');
         const temperatureInput = document.getElementById('temperature');
         const topKInput = document.getElementById('top_k');
         const topPInput = document.getElementById('top_p');
@@ -345,6 +360,52 @@ You are a helpful AI assistant.<|im_end|>
         const tokenTooltip = document.getElementById('token-tooltip');
         const tooltipContent = document.getElementById('tooltip-content');
         const currentTokenInfo = document.getElementById('current-token-info');
+
+        // 示例提示词映射
+        const examplePrompts = {
+            future_event: `<|im_start|>system
+You are a helpful AI assistant.<|im_end|>
+<|im_start|>user
+2035年12月1日发生了什么？<|im_end|>
+<|im_start|>assistant
+`,
+            short_story: `<|im_start|>system
+You are a helpful AI assistant.<|im_end|>
+<|im_start|>user
+请帮我写一个200字左右的故事？<|im_end|>
+<|im_start|>assistant
+`,
+            website_info: `<|im_start|>system
+You are a helpful AI assistant.<|im_end|>
+<|im_start|>user
+example.com是什么网站？<|im_end|>
+<|im_start|>assistant
+`,
+            internet_access: `<|im_start|>system
+You are a helpful AI assistant.<|im_end|>
+<|im_start|>user
+你可以联网吗？<|im_end|>
+<|im_start|>assistant
+`,
+            translation: `<|im_start|>system
+You are a helpful AI assistant.<|im_end|>
+<|im_start|>user
+请将这句话翻译成英文：今天天气真好<|im_end|>
+<|im_start|>assistant
+`,
+            code_example: `<|im_start|>system
+You are a helpful AI assistant.<|im_end|>
+<|im_start|>user
+写一个Python函数计算斐波那契数列<|im_end|>
+<|im_start|>assistant
+`,
+            explain_ai: `<|im_start|>system
+You are a helpful AI assistant.<|im_end|>
+<|im_start|>user
+天空为什么是蔚蓝色的？<|im_end|>
+<|im_start|>assistant
+`
+        };
 
         // 状态变量
         let currentTokens = [];
@@ -366,6 +427,18 @@ You are a helpful AI assistant.<|im_end|>
         toggleParamsBtn.addEventListener('click', () => {
             paramsPanel.classList.toggle('hidden');
             toggleParamsBtn.textContent = paramsPanel.classList.contains('hidden') ? '显示设置' : '隐藏设置';
+        });
+
+        // 示例提示词选择
+        examplePromptSelect.addEventListener('change', (e) => {
+            const selectedValue = e.target.value;
+            if (selectedValue && examplePrompts[selectedValue]) {
+                promptInput.value = examplePrompts[selectedValue];
+                updateStatus(`已加载示例: "${e.target.options[e.target.selectedIndex].text}"`, 'info');
+                
+                // 重置选择框
+                e.target.value = '';
+            }
         });
 
         // 更新状态显示
@@ -636,6 +709,9 @@ You are a helpful AI assistant.<|im_end|>
                 
                 if (!defaultModelFound) {
                     updateStatus(`注意: 默认模型未找到，使用列表第一个模型`, 'info');
+					    if (models.length > 0) {
+							modelSelect.value = models[0].name;
+					    }
                 } else {
                     updateStatus(`已加载 ${models.length} 个模型`, 'success');
                 }
@@ -822,7 +898,7 @@ You are a helpful AI assistant.<|im_end|>
                 outputContent.appendChild(exampleElement);
                 
                 const percentage = logprobToPercentage(exampleToken.logprob);
-                updateStatus(`示例: 悬停在"量子"词元上查看概率 (${percentage.toFixed(1)}% 置信度)`, 'info');
+                updateStatus(`示例: 悬停在"量子"词元上查看概率`, 'info');
             }, 1000);
         });
 
